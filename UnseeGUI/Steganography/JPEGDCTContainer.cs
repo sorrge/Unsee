@@ -58,10 +58,8 @@ namespace UnseeGUI.Steganography
       for (int c = 0; c < decompressInfo.Num_components; ++c)
       {
         var array = coefficients[c].Access(0, decompressInfo.Comp_info[c].Height_in_blocks);
-        bool evenWidth = decompressInfo.Comp_info[c].Downsampled_width % JpegConstants.DCTSIZE == 0;
-        bool evenHeight = decompressInfo.Comp_info[c].Downsampled_height % JpegConstants.DCTSIZE == 0;
-        for (int x = 0; x < array.Length - (evenHeight ? 0 : 1); ++x)
-          for (int y = 0; y < array[x].Length - (evenWidth ? 0 : 1); ++y)
+        for (int x = 0; x < decompressInfo.Comp_info[c].Downsampled_height / JpegConstants.DCTSIZE; ++x)
+          for (int y = 0; y < decompressInfo.Comp_info[c].Downsampled_width / JpegConstants.DCTSIZE; ++y)
             for (int i = 0; i < JpegConstants.DCTSIZE2; ++i)
               if (Math.Abs(array[x][y][i]) > 0)
                 allBits.Add(new Bit { block = array[x][y], component = i });
