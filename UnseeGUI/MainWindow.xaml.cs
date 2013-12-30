@@ -263,7 +263,7 @@ namespace UnseeGUI
       RevealedSecretFileName.Text = "";
       RevealedSecretStatusLabel.Text = "";
 
-      container.SetAccessPassword(PasswordText.Text);
+      container.SetAccessPassword(RevealPasswordText.Text);
 
       byte[] allPayload = new byte[container.Size];
       for (int i = 0; i < container.Size; ++i)
