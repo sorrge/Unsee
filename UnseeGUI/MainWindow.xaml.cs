@@ -31,7 +31,7 @@ namespace UnseeGUI
 
     Steganography.IContainer container = null;
     byte[] secret = null, revealedSecret = null;
-    int secretSize;
+    int secretSize, containerSize = 0;
 
     public MainWindow()
     {
@@ -60,11 +60,12 @@ namespace UnseeGUI
             src.BeginInit();
             src.StreamSource = new MemoryStream(File.ReadAllBytes(ContainerName.Text));
             src.EndInit();
-            //src.UriSource = new Uri(System.IO.Path.GetFullPath(ContainerName.Text));
             ContainerThumbnail.Source = src;
             File.SetLastAccessTimeUtc(ContainerName.Text, accessTime);
 
-            ContainerStatusLabel.Text = "File loaded, maximum secret size: " + container.Size + " bytes";
+            var tempCodec = new Steganography.GlobalHistogramCodec(new Steganography.Filter(container));
+            containerSize = tempCodec.SizeEstimation;
+            ContainerStatusLabel.Text = "File loaded, maximum secret size: " + containerSize + " bytes";
           }
           catch(IOException ex)
           {
@@ -86,7 +87,7 @@ namespace UnseeGUI
     {
       var accessTime = File.GetLastAccessTimeUtc(ContainerName.Text);
       using (FileStream containerFile = new FileStream(ContainerName.Text, FileMode.Open, FileAccess.Read))
-        container = new Steganography.JPEGDCTContainer(containerFile, ContainerName.Text);
+        container = new Steganography.JPEGDCTContainer(containerFile);
       File.SetLastAccessTimeUtc(ContainerName.Text, accessTime);
     }
 
@@ -157,13 +158,13 @@ namespace UnseeGUI
 
     void UpdateButtons()
     {
-      HideButton.IsEnabled = container != null && container.Size >= SecretSize;
+      HideButton.IsEnabled = container != null && containerSize >= SecretSize;
       HideButton.ToolTip = container == null ? "Choose a container file first" : SecretSize == 0 ? "Erase all secret data in the container" :
-        SecretSize > container.Size ? "The container is too small for the secret" : "Hide the secret in the container";
+        SecretSize > containerSize ? "The container is too small for the secret" : "Hide the secret in the container";
 
-      RevealButton.IsEnabled = container != null && container.Size >= Crypto.AESThenHMAC.MessageSizeEstimation(1) + SizeCheckOverhead;
+      RevealButton.IsEnabled = container != null && containerSize >= Crypto.AESThenHMAC.MessageSizeEstimation(1) + SizeCheckOverhead;
       RevealButton.ToolTip = container == null ? "Choose a container file first" :
-        container.Size < Crypto.AESThenHMAC.MessageSizeEstimation(1) + SizeCheckOverhead ? "The container is too small to hold any secret" : "Reveal the secret";
+        containerSize < Crypto.AESThenHMAC.MessageSizeEstimation(1) + SizeCheckOverhead ? "The container is too small to hold any secret" : "Reveal the secret";
 
       RevealedSecretFileSave.IsEnabled = revealedSecret != null;
     }
@@ -174,12 +175,13 @@ namespace UnseeGUI
       {
         try
         {
-          container.SetAccessPassword(PasswordText.Text);
+          var codec = MakeCodec();
+          var buffer = new byte[codec.SizeEstimation];
 
           byte[] salt, key;
           Crypto.AESThenHMAC.GenerateKeyFromPassword(PasswordText.Text, out salt, out key);
           for (int i = 0; i < salt.Length; ++i)
-            container[i] = salt[i];
+            buffer[i] = salt[i];
 
           var secretFileName = System.IO.Path.GetFileName(SecretFileName.Text);
 
@@ -210,30 +212,28 @@ namespace UnseeGUI
 
           var payload = Crypto.AESThenHMAC.SimpleEncryptWithPassword(message, PasswordText.Text);
 
-
           for (int i = 0; i < payload.Length; ++i)
-            container[i + salt.Length] = payload[i];
+            buffer[i + salt.Length] = payload[i];
 
-          for (int i = 0; i < payload.Length; ++i)
-            if (container[i + salt.Length] != payload[i])
-              throw new Exception("Secret verification failed");
+          byte[] buf = new byte[4];
+          Random.GetBytes(buf);
+          uint r = (uint)(BitConverter.ToUInt32(buf, 0) % 8);
+          buffer[salt.Length + payload.Length] = key[r];
+          Random.GetBytes(buf);
+          r = (uint)((r + 1 + (uint)(BitConverter.ToUInt32(buf, 0) % 7)) % 8);
+          buffer[salt.Length + payload.Length + 1] = key[r];
+          var buf2 = new byte[salt.Length + payload.Length + 2];
+          Array.Copy(buffer, buf2, buf2.Length);
+          codec.Write(buf2);
 
-
-          byte[] buffer = new byte[4];
-          Random.GetBytes(buffer);
-          uint r = (uint)(BitConverter.ToUInt32(buffer, 0) % 8);
-          container[salt.Length + payload.Length] = key[r];
-          Random.GetBytes(buffer);
-          r = (uint)((r + 1 + (uint)(BitConverter.ToUInt32(buffer, 0) % 7)) % 8);
-          container[salt.Length + payload.Length + 1] = key[r];
-
-          container.Save();
+          OverwriteContainer();
           LoadContainer();
-          container.SetAccessPassword(PasswordText.Text);
+          codec = MakeCodec();
+          var readBack = codec.Read();
 
-          for (int i = 0; i < payload.Length; ++i)
-            if (container[i + salt.Length] != payload[i])
-              throw new Exception("Secondary secret verification failed");
+          for (int i = 0; i < buf2.Length; ++i)
+            if (readBack[i] != buf2[i])
+              throw new Exception("Secret verification failed");
 
           MessageBox.Show(this, "The secret has been successfully placed in the container.");
         }
@@ -244,16 +244,44 @@ namespace UnseeGUI
       }
       else
       {
-        byte[] buffer = new byte[container.Size], buffer2 = new byte[container.Size];
-        Random.GetBytes(buffer);
-        Random.GetBytes(buffer2);
-        for (int i = 0; i < container.Size; ++i)
-          if (buffer2[i] < 10 || i < 100)
-            container[i] = buffer[i];
+        try
+        {
+          var codec = new Steganography.GlobalHistogramCodec(new Steganography.Filter(container));
+          var data = codec.Read();
+          byte[] buffer = new byte[data.Length], buffer2 = new byte[data.Length];
+          Random.GetBytes(buffer);
+          Random.GetBytes(buffer2);
+          for (int i = 0; i < data.Length; ++i)
+            if (buffer2[i] < 10 || i < 100)
+              data[i] = buffer[i];
+          codec.Write(data);
 
-        container.Save();
-        MessageBox.Show("Any secret messages have been erased from the container.");
+          OverwriteContainer();
+
+          MessageBox.Show("Any secret messages have been erased from the container.");
+        }
+        catch(Exception ex)
+        {
+          MessageBox.Show(this, "Secret erasing failed: " + ex.Message);
+        }
       }
+    }
+
+    private Steganography.GlobalHistogramCodec MakeCodec()
+    {
+      return new Steganography.GlobalHistogramCodec(new Steganography.Permutation(new Steganography.Filter(container), PasswordText.Text));
+    }
+
+    private void OverwriteContainer()
+    {
+      var accessTime = File.GetLastAccessTimeUtc(ContainerName.Text);
+      var writeTime = File.GetLastWriteTimeUtc(ContainerName.Text);
+
+      using (var file = new FileStream(ContainerName.Text, FileMode.Create, FileAccess.Write))
+        container.Save(file);
+
+      File.SetLastAccessTimeUtc(ContainerName.Text, accessTime);
+      File.SetLastWriteTimeUtc(ContainerName.Text, writeTime);
     }
 
     private void RevealButton_Click(object sender, RoutedEventArgs e)
@@ -263,21 +291,19 @@ namespace UnseeGUI
       RevealedSecretFileName.Text = "";
       RevealedSecretStatusLabel.Text = "";
 
-      container.SetAccessPassword(RevealPasswordText.Text);
+      var codec = MakeCodec();
+      var data = codec.Read();
 
-      byte[] allPayload = new byte[container.Size];
-      for (int i = 0; i < container.Size; ++i)
-        allPayload[i] = container[i];
 
       byte[] salt = new byte[Crypto.AESThenHMAC.SaltBitSize / 8];
       for (int i = 0; i < salt.Length; ++i)
-        salt[i] = container[i];
+        salt[i] = data[i];
 
       var key = Crypto.AESThenHMAC.RestoreKeyFromPassword(RevealPasswordText.Text, salt);
 
-      for (int takeSize = Crypto.AESThenHMAC.MessageSizeEstimation(1); takeSize <= container.Size - SizeCheckOverhead; takeSize += 16)
+      for (int takeSize = Crypto.AESThenHMAC.MessageSizeEstimation(1); takeSize <= data.Length - SizeCheckOverhead; takeSize += 16)
       {
-        byte k1 = allPayload[salt.Length + takeSize], k2 = allPayload[salt.Length + takeSize + 1];
+        byte k1 = data[salt.Length + takeSize], k2 = data[salt.Length + takeSize + 1];
         int r = -1;
         for(int i = 0; i < 8; ++i)
           if(key[i] == k1)
@@ -301,7 +327,7 @@ namespace UnseeGUI
           continue;
 
         byte[] payload = new byte[takeSize];
-        Array.Copy(allPayload, salt.Length, payload, 0, takeSize);
+        Array.Copy(data, salt.Length, payload, 0, takeSize);
         var secret = Crypto.AESThenHMAC.SimpleDecryptWithPassword(payload, RevealPasswordText.Text);
         if (secret != null)
         {

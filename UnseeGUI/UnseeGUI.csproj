@@ -61,8 +61,11 @@
     <Compile Include="Crypto\AESThenHMAC.cs" />
     <Compile Include="GUI\WatermarkAdorner.cs" />
     <Compile Include="GUI\WatermarkService.cs" />
+    <Compile Include="Steganography\Filter.cs" />
+    <Compile Include="Steganography\GlobalHistogramCodec.cs" />
     <Compile Include="Steganography\IContainer.cs" />
     <Compile Include="Steganography\JPEGDCTContainer.cs" />
+    <Compile Include="Steganography\Permutation.cs" />
     <Page Include="MainWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
